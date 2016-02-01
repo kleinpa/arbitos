@@ -1,8 +1,10 @@
 #include <EEPROM.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#include <ESP8266HTTPClient.h>
 #include "private.h"
 #include "http_content.h"
+#include "hue.h"
 
 /* Values set in "private.h" */
 // const char* ssid = "home";
@@ -11,37 +13,28 @@
 const int TIMEOUT_NETWORK = 5000;
 const int TIMEOUT_HUE = 5000;
 
-const int PIN_PIR = 2;
+const int PIN_BUTTON = 2;
 const int PIN_LED = 1;
-
-// Runtime State
-bool motion = 0;
-String hue_username = "";
-String request = "";
-String response = "";
 
 // Persistent State
 int STATE_VERSION = 0;
 struct State {
   char id[16];
   int version;
-  float setpoint;
-  float epsilon;
+  char hue_username[40];
 } state;
 
 ESP8266WebServer server(80);
+Hue* hue;
 
 void setup(void)
 {
-  //EEPROM.begin(sizeof(state));
-  //loadState();
+  EEPROM.begin(sizeof(state));
+  loadState();
+  hue = new Hue("192.168.1.146", state.hue_username);
 
-  //Serial.begin(115200);
-  //Serial.println();
 
-  pinMode(PIN_PIR, INPUT);
-  pinMode(PIN_LED, OUTPUT);
-
+  pinMode(PIN_BUTTON, INPUT_PULLUP);
   server.on("/data", handleData);
   load_http_content(server);
   server.begin();
@@ -50,15 +43,9 @@ void setup(void)
 void handleData() {
   if (server.method() == HTTP_GET) {
     String url = "{";
-    url += "\"motion\":";
-    url += motion;
-    url += ",\"hue_username\":\"";
-    url += hue_username;
-    url += "\",\"request\":\"";
-    url += request;
-    url += "\",\"response\":\"";
-    url += response;
-    url += "\"}";
+    url += "\"hue\":";
+    url += hue->get_status();
+    url += "}";
     server.send(200, "application/javascript", url);
   } else if (server.method() == HTTP_POST) {
   }
@@ -71,94 +58,52 @@ void connect_wifi() {
     while (WiFi.status() != WL_CONNECTED) {
       delay(50);
       if (millis() - start > TIMEOUT_NETWORK) {
-        Serial.println("Timeout connecting to network.");
+        //Serial.println("Timeout connecting to network.");
         return;
       }
     }
-    Serial.println(WiFi.localIP());
-
+    //Serial.println(WiFi.localIP());
   }
-}
-
-void connect_hue() {
-  if(!hue_username.length()) {
-    WiFiClient client;
-    String host = "192.168.1.146";
-    const int httpPort = 80;  
-    if (!client.connect("192.168.1.146", httpPort)) {
-      Serial.println("connection failed");
-      return;
-    }
-    
-    delay(10);
-    client.print(
-      "POST /api HTTP/1.1\r\nHost: " + host + "\r\n" +
-      "Content-Length: 25\r\n\r\n{\"devicetype\": \"esp_hue\"}");
-    while (client.available()) {
-      if(client.find("success")){
-        client.find("username");
-        client.find(":");
-        client.find("\"");
-        hue_username = client.readStringUntil('\"');  
-      }
-    }
-  }
-}
-
-void hue_request(char* m, char* url, String content) {
-  response = "1";
-    WiFiClient client;
-    String host = "192.168.1.146";
-    const int httpPort = 80;  
-    if (!client.connect("192.168.1.146", httpPort)) {
-      Serial.println("connection failed");
-      return;
-    }
-    
-    delay(10);
-    request = String(m) + " /api/"+hue_username+url+" HTTP/1.1\r\nHost: " + host + "\r\n" +
-      "Content-Length: "+content.length()+"\r\n\r\n"+content;
-    client.print(request);
-      response = "2";
-    while (client.available()) {
-        response = client.readString();  
-    }
 }
 
 long next_check_hue = millis();
+bool toggle = false;
+bool last_button = false;
 void loop(void)
 {
   connect_wifi();
-  server.handleClient();
-  bool last_motion = motion;
-  motion = digitalRead(PIN_PIR);
-  digitalWrite(PIN_LED, !motion);
-
-
   
-  if(last_motion != motion || millis() > next_check_hue) {
-    next_check_hue = millis() + TIMEOUT_HUE;
-    connect_hue();
-    if(motion){
-      hue_request("PUT", "/lights/1/state","{\"on\":true,\"bri\":255}");
+  server.handleClient();
+
+  long now = millis();
+  
+  bool button = !digitalRead(PIN_BUTTON);
+  if (button && !last_button) {
+    next_check_hue = now + TIMEOUT_HUE;
+    if(!hue->is_connected()) {
+      hue->get_username().toCharArray(state.hue_username, 40);
+      saveState();
+    }
+    toggle = !toggle;
+    if(toggle){
+      hue->request("/groups/1/action", "{\"on\":true,\"bri\":254,\"transitiontime\":0}");
     } else {
-      hue_request("PUT", "/lights/1/state","{\"on\":false}");
+      hue->request("/groups/1/action", "{\"on\":false,\"transitiontime\":0}");
     }
   }
+  last_button = button;
 }
 
-/*char STATE_ID[16] = {0x32, 0x07, 0x0b, 0x4f, 0x08, 0x3c, 0x42, 0x25, 0xa6, 0x09, 0x0c, 0x35, 0x97, 0x92, 0x16, 0x9c};
+char STATE_ID[16] = {0x32, 0x07, 0x0b, 0x4f, 0x08, 0x3c, 0x42, 0x25, 0xa6, 0x09, 0x0c, 0x35, 0x97, 0x92, 0x16, 0x9c};
 
 void loadState() {
-
   EEPROM.get(0, state);
-  if (!(//memcmp(STATE_ID, state.id, 16) && 
+  if (!(//memcmp(STATE_ID, state.id, 16) &&
       STATE_VERSION == state.version)) {
     // Fails ID check, reinitialize
     memcpy(state.id, STATE_ID, 16);
     state.version = STATE_VERSION;
-    state.setpoint = 8;
-    state.epsilon = 0.2;
+    state.hue_username[0] = '\0';
     saveState();
   }
 }
@@ -166,4 +111,4 @@ void loadState() {
 void saveState() {
   EEPROM.put(0, state);
   EEPROM.commit();
-}*/
+}
