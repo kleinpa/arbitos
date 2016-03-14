@@ -12,7 +12,7 @@
 
 #ifndef DEBUG_ESP_PORT
 #define DEBUG_ESP_PORT Serial
-#endif 
+#endif
 
 #define DEBUG(...) DEBUG_ESP_PORT.printf( __VA_ARGS__ )
 
@@ -23,9 +23,17 @@
 const int TIMEOUT_NETWORK = 5000;
 const int TIMEOUT_HUE = 5000;
 
-const int PIN_BUTTON = 13;
-const int PIN_LED = 12;
+const int pin_s0_en = 4;
+const int pin_s1_en = 5;
+const int pin_s2_en = 15;
 
+const int pin_led_0 = 12;
+const int pin_led_1 = 14;
+const int pin_led_2 = 16;
+
+const int pin_button_0 = 13;
+const int pin_button_1 = 0;
+const int pin_button_2 = 2;
 
 
 ESP8266WebServer server(80);
@@ -77,14 +85,14 @@ void setupMDNS()
 {
   // Call MDNS.begin(<domain>) to set up mDNS to point to
   // "<domain>.local"
-  if (!MDNS.begin(name)) 
+  if (!MDNS.begin(name))
   {
     DEBUG("[mdns] Error setting up MDNS responder\n");
-    while(1) { 
+    while(1) {
       delay(1000);
     }
   }
-  
+
   MDNS.addService("arbitos", "tcp", 80);
   DEBUG("[mdns] mDNS responder started\n");
 }
@@ -108,7 +116,22 @@ void setup(void)
   loadState();
   hue = new Hue("192.168.1.149", state.hue_username);
 
-  pinMode(PIN_BUTTON, INPUT_PULLUP);
+  pinMode(pin_s0_en, OUTPUT);
+  pinMode(pin_s1_en, OUTPUT); 
+  pinMode(pin_s2_en, OUTPUT);
+
+  pinMode(pin_led_0, OUTPUT);
+  pinMode(pin_led_1, OUTPUT); 
+  pinMode(pin_led_2, OUTPUT);
+
+  pinMode(pin_button_0, INPUT_PULLUP); 
+  pinMode(pin_button_1, INPUT_PULLUP);
+  pinMode(pin_button_2, INPUT_PULLUP);
+
+  digitalWrite(pin_s0_en, 0);
+  digitalWrite(pin_s1_en, 0);
+  digitalWrite(pin_s2_en, 0);
+
   server.on("/data", handleData);
   load_http_content(server);
   server.begin();
@@ -130,15 +153,14 @@ void connect_wifi() {
   }
 }
 
-long next_check_hue = millis();
-bool toggle = false;
-bool last_button = false;
 bool last_connected = false;
+long last_color_update = millis();
+int light = 0;
 void loop(void)
 {
   connect_wifi();
   MDNS.update();
-  
+
   server.handleClient();
 
   long now = millis();
@@ -148,18 +170,41 @@ void loop(void)
     saveState();
   }
   last_connected = hue->is_connected();
-  
-  bool button = !digitalRead(PIN_BUTTON);
-  if (button && !last_button) {
-    next_check_hue = now + TIMEOUT_HUE;
 
-    toggle = !toggle;
-    if(toggle){
-      hue->request("/groups/1/action", "{\"on\":true,\"bri\":254,\"transitiontime\":0}");
-    } else {
-      hue->request("/groups/1/action", "{\"on\":false,\"transitiontime\":0}");
-    }
+  if(!digitalRead(pin_button_0)) light = 0;
+  if(!digitalRead(pin_button_1)) light = 1;
+  if(!digitalRead(pin_button_2)) light = 2;
+  digitalWrite(pin_led_0, !(light == 0));
+  digitalWrite(pin_led_1, !(light == 1));
+  digitalWrite(pin_led_2, !(light == 2));
+
+  if(last_color_update + 100 < millis()) {
+    digitalWrite(pin_s0_en, 1);
+    delay(1);
+    int s0 = analogRead(A0);
+    Serial.print(", ");
+    digitalWrite(pin_s0_en, 0);
+    digitalWrite(pin_s1_en, 1);
+    delay(1);
+    int s1 = analogRead(A0);
+    Serial.print(", ");
+    digitalWrite(pin_s1_en, 0);
+    digitalWrite(pin_s2_en, 1);
+    delay(1);
+    int s2 = analogRead(A0);
+    digitalWrite(pin_s2_en, 0);
+
+    DEBUG("[io] Got %d, %d, %d\n", s0, s1, s2);
+    char req[100];
+
+    hue->request(("/lights/"+String(light)+
+    "/state").c_str(), "{\"on\":true,\"hue\":"+
+    String(map(s0, 0, 1024, 0, 65535))+
+    ",\"sat\":"+
+    String(map(s1, 0, 1024, 0, 254))+
+    ",\"bri\":"+
+    String(map(s2, 0, 1024, 0, 254))+
+    ",\"transitiontime\":0}");
+    last_color_update = millis();
   }
-  last_button = button;
 }
-

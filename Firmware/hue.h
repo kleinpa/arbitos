@@ -14,7 +14,7 @@ public:
   boolean is_connected();
   void begin();
   boolean connect();
-  boolean request(char* url, String content);
+  boolean request(const char* url, String content);
   String get_status();
 };
 

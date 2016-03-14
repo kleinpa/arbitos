@@ -37,7 +37,7 @@ boolean Hue::connect() {
   return this->connected;
 }
 
-boolean Hue::request(char* url, String content) {
+boolean Hue::request(const char* url, String content) {
   if (!this->connected) { if(!connect()) return false; }
   
   DEBUG("[hue] Sending command '%s' to '%s'\n", content.c_str(), url);
