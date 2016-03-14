@@ -8,7 +8,6 @@ private:
   bool connected;
   HTTPClient  client;
 public: 
-  String httprequest, httpresponse;
   Hue(String bridge_address, String username);
   void set_username(String username);
   String get_username();
