@@ -6,6 +6,7 @@
 #include "private.h"
 #include "http_content.h"
 #include "hue.h"
+#include "arbitos_hardware.h"
 
 #define DEBUG_ESP_HTTP_CLIENT
 #define DEBUG_HTTPCLIENT
@@ -20,61 +21,55 @@
 // const char* ssid = "home";
 // const char* password = "P4aaw0rd55";
 
+const char applicationId[16] = {0x32, 0x07, 0x0b, 0x4f, 0x08, 0x3c, 0x42, 0x25, 0xa6, 0x09, 0x0c, 0x35, 0x97, 0x92, 0x16, 0xa1};
+const int applicationVersion = 1;
+const char* applicationName = "arbitos";
+
 const int TIMEOUT_NETWORK = 5000;
 const int TIMEOUT_HUE = 5000;
 
-const int pin_s0_en = 4;
-const int pin_s1_en = 5;
-const int pin_s2_en = 15;
-
-const int pin_led_0 = 12;
-const int pin_led_1 = 14;
-const int pin_led_2 = 16;
-
-const int pin_button_0 = 13;
-const int pin_button_1 = 0;
-const int pin_button_2 = 2;
-
-
 ESP8266WebServer server(80);
+ArbitosHardware hardware;
 Hue* hue;
 
-char name[32];
+char hostName[32];
 
 // Persistent State
-char STATE_ID[16] = {0x32, 0x07, 0x0b, 0x4f, 0x08, 0x3c, 0x42, 0x25, 0xa6, 0x09, 0x0c, 0x35, 0x97, 0x92, 0x16, 0xa1};
-int STATE_VERSION = 1;
 struct State {
   char id[16];
   int version;
-  char hue_username[40];
+  char hueUsername[40];
 } state;
 
 void saveState() {
   DEBUG("[state] Writing state to EEPROM\n");
+  EEPROM.begin(sizeof(state));
   EEPROM.put(0, state);
   EEPROM.commit();
+  EEPROM.end();
 }
 
 void loadState() {
   DEBUG("[state] Reading state from EEPROM\n");
+  EEPROM.begin(sizeof(state));
   EEPROM.get(0, state);
-  if (memcmp(STATE_ID, state.id, 16) ||
-      STATE_VERSION != state.version) {
+  if (memcmp(applicationId, state.id, 16) ||
+      applicationVersion != state.version) {
     DEBUG("[state] Version check failed, reinitializing\n");
     // Fails ID check, reinitialize
-    memcpy(state.id, STATE_ID, 16);
-    state.version = STATE_VERSION;
-    state.hue_username[0] = '\0';
+    memcpy(state.id, applicationId, 16);
+    state.version = applicationVersion;
+    state.hueUsername[0] = '\0';
     saveState();
   }
+  EEPROM.end();
 }
 
 void handleData() {
   if (server.method() == HTTP_GET) {
     String url = "{";
     url += "\"hue\":";
-    url += hue->get_status();
+    url += hue->getStatus();
     url += "}";
     server.send(200, "application/javascript", url);
   } else if (server.method() == HTTP_POST) {
@@ -85,7 +80,7 @@ void setupMDNS()
 {
   // Call MDNS.begin(<domain>) to set up mDNS to point to
   // "<domain>.local"
-  if (!MDNS.begin(name))
+  if (!MDNS.begin(hostName))
   {
     DEBUG("[mdns] Error setting up MDNS responder\n");
     while(1) {
@@ -93,51 +88,55 @@ void setupMDNS()
     }
   }
 
-  MDNS.addService("arbitos", "tcp", 80);
+  MDNS.addService(applicationName, "tcp", 80);
   DEBUG("[mdns] mDNS responder started\n");
 }
 
-void set_name() {
-  String s = "arbitos-";
+void setHostName() {
+  String s = String(applicationName) + "-";
   byte mac[6];
   WiFi.macAddress(mac);
-  s += String(mac[3],HEX);
-  s += String(mac[4],HEX);
-  s += String(mac[5],HEX);
-  s.toCharArray(name, 32);
+  s += String(mac[3], HEX);
+  s += String(mac[4], HEX);
+  s += String(mac[5], HEX);
+  s.toCharArray(hostName, 32);
+}
+
+int light = 0;
+void buttonPress(int button) {
+  light = button;
+}
+
+void buttonLongPress(int button) {
+  hardware.blinkLED(button, 3);
+}
+
+int s[3];
+int colorUpdateNeeded = 0;
+void sliderMove(int slider, int value) {
+  s[slider] = value;
+  colorUpdateNeeded = 1;
 }
 
 void setup(void)
 {
-  set_name();
+  setHostName();
   Serial.begin(115200);
-  DEBUG("[main] Starting %s\n", name);
-  EEPROM.begin(sizeof(state));
+  DEBUG("[main] Starting %s\n", hostName);
+
   loadState();
-  hue = new Hue("192.168.1.149", state.hue_username);
-
-  pinMode(pin_s0_en, OUTPUT);
-  pinMode(pin_s1_en, OUTPUT); 
-  pinMode(pin_s2_en, OUTPUT);
-
-  pinMode(pin_led_0, OUTPUT);
-  pinMode(pin_led_1, OUTPUT); 
-  pinMode(pin_led_2, OUTPUT);
-
-  pinMode(pin_button_0, INPUT_PULLUP); 
-  pinMode(pin_button_1, INPUT_PULLUP);
-  pinMode(pin_button_2, INPUT_PULLUP);
-
-  digitalWrite(pin_s0_en, 0);
-  digitalWrite(pin_s1_en, 0);
-  digitalWrite(pin_s2_en, 0);
+  hue = new Hue("192.168.1.149", state.hueUsername);
 
   server.on("/data", handleData);
-  load_http_content(server);
+  loadHttpContent(server);
   server.begin();
+  hardware.begin();
+  hardware.onButtonLongPress(buttonLongPress);
+  hardware.onButtonPress(buttonPress);
+  hardware.onSliderMove(sliderMove);
 }
 
-void connect_wifi() {
+void connectWifi() {
   if (WiFi.status() != WL_CONNECTED) {
     unsigned long start = millis();
     WiFi.begin(ssid, password);
@@ -153,58 +152,41 @@ void connect_wifi() {
   }
 }
 
-bool last_connected = false;
-long last_color_update = millis();
-int light = 0;
+
+bool lastConnected = false;
+long lastColorUpdate = millis();
+
 void loop(void)
 {
-  connect_wifi();
+  hardware.update();
+  connectWifi();
   MDNS.update();
 
   server.handleClient();
 
-  long now = millis();
-
-  if(hue->is_connected() && !last_connected) {
-    hue->get_username().toCharArray(state.hue_username, 40);
+  if(hue->isConnected() && !lastConnected) {
+    hue->getUsername().toCharArray(state.hueUsername, 40);
     saveState();
   }
-  last_connected = hue->is_connected();
+  lastConnected = hue->isConnected();
 
-  if(!digitalRead(pin_button_0)) light = 0;
-  if(!digitalRead(pin_button_1)) light = 1;
-  if(!digitalRead(pin_button_2)) light = 2;
-  digitalWrite(pin_led_0, !(light == 0));
-  digitalWrite(pin_led_1, !(light == 1));
-  digitalWrite(pin_led_2, !(light == 2));
-
-  if(last_color_update + 100 < millis()) {
-    digitalWrite(pin_s0_en, 1);
-    delay(1);
-    int s0 = analogRead(A0);
-    Serial.print(", ");
-    digitalWrite(pin_s0_en, 0);
-    digitalWrite(pin_s1_en, 1);
-    delay(1);
-    int s1 = analogRead(A0);
-    Serial.print(", ");
-    digitalWrite(pin_s1_en, 0);
-    digitalWrite(pin_s2_en, 1);
-    delay(1);
-    int s2 = analogRead(A0);
-    digitalWrite(pin_s2_en, 0);
-
-    DEBUG("[io] Got %d, %d, %d\n", s0, s1, s2);
+  if(colorUpdateNeeded && lastColorUpdate + 100 < millis()) {
+    colorUpdateNeeded = 0;
+    DEBUG("[io] Got %d, %d, %d\n", s[0], s[1], s[2]);
     char req[100];
 
     hue->request(("/lights/"+String(light)+
     "/state").c_str(), "{\"on\":true,\"hue\":"+
-    String(map(s0, 0, 1024, 0, 65535))+
+    String(map(s[0], 0, 1024, 0, 65535))+
     ",\"sat\":"+
-    String(map(s1, 0, 1024, 0, 254))+
+    String(map(s[1], 0, 1024, 0, 254))+
     ",\"bri\":"+
-    String(map(s2, 0, 1024, 0, 254))+
+    String(map(s[2], 0, 1024, 0, 254))+
     ",\"transitiontime\":0}");
-    last_color_update = millis();
+    lastColorUpdate = millis();
   }
+
+  hardware.setLED(0, (light == 0));
+  hardware.setLED(1, (light == 1));
+  hardware.setLED(2, (light == 2));
 }

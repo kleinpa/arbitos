@@ -4,21 +4,20 @@
 
 #ifndef DEBUG_ESP_PORT
 #define DEBUG_ESP_PORT Serial
-#endif 
+#endif
 
 #define DEBUG(...) DEBUG_ESP_PORT.printf( __VA_ARGS__ )
 
-Hue::Hue(String bridge_address, String username) {
-  this->bridge_address = bridge_address;
-  this->username = username;
-  this->connected = username[0];
+Hue::Hue(String bridgeAddress, String username) {
+  this->bridgeAddress = bridgeAddress;
+  this->setUsername(username);
   if(this->connected) DEBUG("[hue] Using saved username '%s'\n", this->username.c_str());
 }
 
 boolean Hue::connect() {
   if (!connected) {
     DEBUG("[hue] Connecting...\n");
-    client.begin(bridge_address, 80, "/api");
+    client.begin(bridgeAddress, 80, "/api");
     client.POST("{\"devicetype\": \"arbitos\"}");
     WiFiClient* resp = client.getStreamPtr();
     while (resp->available()) {
@@ -39,37 +38,39 @@ boolean Hue::connect() {
 
 boolean Hue::request(const char* url, String content) {
   if (!this->connected) { if(!connect()) return false; }
-  
+
   DEBUG("[hue] Sending command '%s' to '%s'\n", content.c_str(), url);
-  client.begin(bridge_address, 80, "/api/" + username + url);
+  client.begin(bridgeAddress, 80, "/api/" + username + url);
   int code = client.sendRequest("PUT", (uint8_t *) content.c_str(), content.length());
-  if(code != HTTP_CODE_OK) {
+  if(code != HTTP_CODE_OK && code > 0) {
     DEBUG("[hue] Received code %d\n", code);
     this->connected = false;
+  }
+  if(code <= 0) {
+    DEBUG("[hue] Unknown error during request\n");
   }
   client.end();
 }
 
-String Hue::get_username() {
+String Hue::getUsername() {
   return username;
 }
 
-void Hue::set_username(String username) {
+void Hue::setUsername(String username) {
   this->username = username;
-  this->connected = true;
+  if(username[0]) this->connected = true;
 }
 
-boolean Hue::is_connected() {
-  return connected;  
+boolean Hue::isConnected() {
+  return connected;
 }
 
-String Hue::get_status() {
+String Hue::getStatus() {
   String s;
   s += "{\"connected\":";
   s += connected?"true":"false";
   s += ",\"username\":\"";
   s += username;
   s += "\"}";
-  return s;  
+  return s;
 }
-

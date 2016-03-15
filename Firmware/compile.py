@@ -41,7 +41,7 @@ for path in files:
 with open('http_content.h', 'w') as o:
   for http_path, mimetype, path, signature, l, b in file_spec:
     o.write("const char " + signature + "[" + str(l) + "] = " + b + ";\n")
-  o.write("void load_http_content(ESP8266WebServer &server) {\n")
+  o.write("void loadHttpContent(ESP8266WebServer &server) {\n")
   for http_path, mimetype, path, signature, l, b in file_spec:
     o.write("  server.on(\"" + toCString(http_path) + "\", [&server]() { server.send_P(200, \"" + toCString(mimetype) + "\", " + signature + "," + str(l) + ");});\n")
     if http_path.endswith("index.html"):

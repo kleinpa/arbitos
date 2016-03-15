@@ -3,18 +3,17 @@
 class Hue
 {
 private:
-  String bridge_address;
+  String bridgeAddress;
   String username;
   bool connected;
   HTTPClient  client;
-public: 
-  Hue(String bridge_address, String username);
-  void set_username(String username);
-  String get_username();
-  boolean is_connected();
+public:
+  Hue(String bridgeAddress, String username);
+  void setUsername(String username);
+  String getUsername();
+  boolean isConnected();
   void begin();
   boolean connect();
   boolean request(const char* url, String content);
-  String get_status();
+  String getStatus();
 };
-
