@@ -118,7 +118,7 @@ long lastColorUpdate = millis();
 void loop(void)
 {
   hardware.update();
-
+  network.update();
   webServer.handleClient();
 
   if(hue->isConnected() && !lastConnected) {
