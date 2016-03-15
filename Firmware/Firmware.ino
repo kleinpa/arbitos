@@ -2,11 +2,10 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
-#include <ESP8266mDNS.h>
-#include "private.h"
 #include "http_content.h"
 #include "hue.h"
 #include "arbitos_hardware.h"
+#include "arbitos_network.h"
 
 #define DEBUG_ESP_HTTP_CLIENT
 #define DEBUG_HTTPCLIENT
@@ -25,14 +24,12 @@ const char applicationId[16] = {0x32, 0x07, 0x0b, 0x4f, 0x08, 0x3c, 0x42, 0x25, 
 const int applicationVersion = 1;
 const char* applicationName = "arbitos";
 
-const int TIMEOUT_NETWORK = 5000;
 const int TIMEOUT_HUE = 5000;
 
-ESP8266WebServer server(80);
+ESP8266WebServer webServer(80);
 ArbitosHardware hardware;
+ArbitosNetwork network;
 Hue* hue;
-
-char hostName[32];
 
 // Persistent State
 struct State {
@@ -66,40 +63,14 @@ void loadState() {
 }
 
 void handleData() {
-  if (server.method() == HTTP_GET) {
+  if (webServer.method() == HTTP_GET) {
     String url = "{";
     url += "\"hue\":";
     url += hue->getStatus();
     url += "}";
-    server.send(200, "application/javascript", url);
-  } else if (server.method() == HTTP_POST) {
+    webServer.send(200, "application/javascript", url);
+  } else if (webServer.method() == HTTP_POST) {
   }
-}
-
-void setupMDNS()
-{
-  // Call MDNS.begin(<domain>) to set up mDNS to point to
-  // "<domain>.local"
-  if (!MDNS.begin(hostName))
-  {
-    DEBUG("[mdns] Error setting up MDNS responder\n");
-    while(1) {
-      delay(1000);
-    }
-  }
-
-  MDNS.addService(applicationName, "tcp", 80);
-  DEBUG("[mdns] mDNS responder started\n");
-}
-
-void setHostName() {
-  String s = String(applicationName) + "-";
-  byte mac[6];
-  WiFi.macAddress(mac);
-  s += String(mac[3], HEX);
-  s += String(mac[4], HEX);
-  s += String(mac[5], HEX);
-  s.toCharArray(hostName, 32);
 }
 
 int light = 0;
@@ -120,38 +91,26 @@ void sliderMove(int slider, int value) {
 
 void setup(void)
 {
-  setHostName();
   Serial.begin(115200);
-  DEBUG("[main] Starting %s\n", hostName);
+  DEBUG("[main] Initializing\n");
 
   loadState();
-  hue = new Hue("192.168.1.149", state.hueUsername);
 
-  server.on("/data", handleData);
-  loadHttpContent(server);
-  server.begin();
-  hardware.begin();
+  network.begin(applicationName);
+  
   hardware.onButtonLongPress(buttonLongPress);
   hardware.onButtonPress(buttonPress);
   hardware.onSliderMove(sliderMove);
-}
+  hardware.begin();
 
-void connectWifi() {
-  if (WiFi.status() != WL_CONNECTED) {
-    unsigned long start = millis();
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(50);
-      if (millis() - start > TIMEOUT_NETWORK) {
-        DEBUG("[network] Timeout connecting to network.\n");
-        return;
-      }
-    }
-    DEBUG("[network] Connected %d.%d.%d.%d\n", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
-    setupMDNS();
-  }
-}
+  webServer.on("/data", handleData);
+  loadHttpContent(webServer);
+  webServer.begin();
+  
+  hue = new Hue("192.168.1.149", state.hueUsername);
 
+  DEBUG("[main] Done initializing (%d ms)\n", millis());
+}
 
 bool lastConnected = false;
 long lastColorUpdate = millis();
@@ -159,10 +118,8 @@ long lastColorUpdate = millis();
 void loop(void)
 {
   hardware.update();
-  connectWifi();
-  MDNS.update();
 
-  server.handleClient();
+  webServer.handleClient();
 
   if(hue->isConnected() && !lastConnected) {
     hue->getUsername().toCharArray(state.hueUsername, 40);
