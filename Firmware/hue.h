@@ -16,4 +16,6 @@ public:
   boolean connect();
   boolean request(const char* url, String content);
   String getStatus();
+  boolean setOff(String url);
+  boolean setRGB(String url, double r, double g, double b);
 };
